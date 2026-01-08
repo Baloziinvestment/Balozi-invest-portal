@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Group Savings Portal</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.4; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; }
+    .big { font-size: 22px; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px; text-align: left; }
+    th { background: #fafafa; position: sticky; top: 0; }
+    .muted { color: #666; font-size: 13px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    input { padding: 10px; border:1px solid #ddd; border-radius: 8px; min-width: 240px; }
+    button { padding: 10px 12px; border:1px solid #ddd; border-radius: 8px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <h1>Group Savings Portal</h1>
+  <div class="row">
+    <div class="muted" id="status">Loading…</div>
+    <button onclick="loadData(true)">Refresh</button>
+    <input id="search" placeholder="Search member / note…" oninput="render()" />
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="muted">Total Deposits</div>
+      <div class="big" id="deposits">—</div>
+    </div>
+    <div class="card">
+      <div class="muted">Total Withdrawals</div>
+      <div class="big" id="withdrawals">—</div>
+    </div>
+    <div class="card">
+      <div class="muted">Current Balance</div>
+      <div class="big" id="balance">—</div>
+    </div>
+    <div class="card">
+      <div class="muted">Last Updated</div>
+      <div class="big" id="updated">—</div>
+    </div>
+  </div>
+
+  <h2>Transactions</h2>
+  <div style="overflow:auto; max-height: 70vh; border:1px solid #eee; border-radius:10px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Member</th>
+          <th>Type</th>
+          <th>Amount</th>
+          <th>Note</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+<script>
+  // 1) https://docs.google.com/spreadsheets/d/e/2PACX-1vQ94VbMrLsjct5SzatagIwvlpEpb_NgeyhY6UsX6DVOJ0GeagEs1CO4xJQe6XxQwp6wUw4m5RgGTVeK/pub?output=csv:
+  const CSV_URL = "PASTE_YOUR_CSV_LINK_HERE";
+
+  let allRows = [];
+
+  function parseCSV(text) {
+    // Simple CSV parser (works well for basic sheets)
+    const lines = text.trim().split(/\r?\n/);
+    const headers = lines.shift().split(",").map(h => h.trim());
+    return lines.map(line => {
+      const cols = line.split(","); // simplest approach (avoid commas inside cells)
+      const obj = {};
+      headers.forEach((h, i) => obj[h] = (cols[i] ?? "").trim());
+      return obj;
+    });
+  }
+
+  function money(n) {
+    if (!isFinite(n)) return "0";
+    return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
+  function toNumber(x) {
+    // remove commas and spaces
+    const v = String(x ?? "").replace(/,/g, "").trim();
+    const n = Number(v);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function calcTotals(rows) {
+    let deposits = 0, withdrawals = 0;
+    for (const r of rows) {
+      const type = (r.Type || r.type || "").toLowerCase();
+      const amt = toNumber(r.Amount || r.amount);
+      if (type.includes("deposit")) deposits += amt;
+      else if (type.includes("withdraw")) withdrawals += amt;
+    }
+    return { deposits, withdrawals, balance: deposits - withdrawals };
+  }
+
+  function render() {
+    const q = (document.getElementById("search").value || "").toLowerCase().trim();
+    const rows = q
+      ? allRows.filter(r =>
+          (r.Member || "").toLowerCase().includes(q) ||
+          (r.Note || "").toLowerCase().includes(q) ||
+          (r.Type || "").toLowerCase().includes(q) ||
+          (r.Date || "").toLowerCase().includes(q)
+        )
+      : allRows;
+
+    const t = calcTotals(allRows);
+    document.getElementById("deposits").textContent = money(t.deposits);
+    document.getElementById("withdrawals").textContent = money(t.withdrawals);
+    document.getElementById("balance").textContent = money(t.balance);
+
+    const tbody = document.getElementById("rows");
+    tbody.innerHTML = "";
+
+    // Show latest first (assumes Date is filled; otherwise just shows sheet order)
+    const sorted = [...rows].reverse();
+
+    for (const r of sorted) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${r.Date ?? ""}</td>
+        <td>${r.Member ?? ""}</td>
+        <td>${r.Type ?? ""}</td>
+        <td>${r.Amount ?? ""}</td>
+        <td>${r.Note ?? ""}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  async function loadData(manual=false) {
+    const status = document.getElementById("status");
+    status.textContent = manual ? "Refreshing…" : "Loading…";
+
+    try {
+      // Add cache-buster so it refreshes properly
+      const res = await fetch(CSV_URL + (CSV_URL.includes("?") ? "&" : "?") + "t=" + Date.now());
+      if (!res.ok) throw new Error("Failed to fetch CSV");
+      const text = await res.text();
+
+      allRows = parseCSV(text);
+      document.getElementById("updated").textContent = new Date().toLocaleString();
+      status.textContent = "Live";
+      render();
+    } catch (e) {
+      status.textContent = "Error loading data. Check your CSV publish link.";
+      console.error(e);
+    }
+  }
+
+  loadData(false);
+  // Auto-refresh every 30 seconds
+  setInterval(() => loadData(false), 30000);
+</script>
+</body>
+</html>
